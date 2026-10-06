@@ -1,168 +1,274 @@
 import java.io.*;
-import java.nio.charset.StandardCharsets;
-import java.util.*;
+import java.util.Arrays;
 import java.util.concurrent.Semaphore;
 
 public class UploadServlet extends HttpServlet {
 
-   private static final Semaphore uploadSemaphore = new Semaphore(3);
-   private final ImageDAO imageDAO = new ImageDAO();
-   private String contentType;
+   private static final Semaphore uploadSemaphore =
+      new Semaphore(3);
 
-   public void setContentType(String contentType) {
-      this.contentType = contentType;
-   }
+   private final ImageDAO imageDAO =
+      new ImageDAO();
 
-   protected void doGet(HttpServletRequest request,
-                        HttpServletResponse response) {
+   protected void doGet(
+         HttpServletRequest request,
+         HttpServletResponse response) {
 
       log("GET request started");
 
       try {
-         PrintWriter out =
-            new PrintWriter(response.getOutputStream(), true);
 
-         String html =
-            "<!DOCTYPE html>" +
-            "<html>" +
-            "<body>" +
-            "<form method='POST' action='/' enctype='multipart/form-data'>" +
-            "<label>Caption:</label><br>" +
-            "<input type='text' name='caption'><br><br>" +
-            "<label>Date:</label><br>" +
-            "<input type='date' name='date'><br><br>" +
-            "<label>File:</label><br>" +
-            "<input type='file' name='fileName'><br><br>" +
-            "<input type='submit' value='Upload'>" +
-            "</form>" +
-            "</body>" +
-            "</html>";
+         OutputStream out =
+            response.getOutputStream();
 
-         out.print("HTTP/1.1 200 OK\r\n");
-         out.print("Content-Type: text/html\r\n");
-         out.print("Connection: close\r\n");
-         out.print("\r\n");
-         out.print(html);
+         File htmlFile =
+            new File("Form.html");
+
+         FileInputStream fileInputStream =
+            new FileInputStream(htmlFile);
+
+         String content =
+            "HTTP/1.1 200 OK\r\n" +
+            "Content-Type: text/html\r\n" +
+            "Content-Length: " +
+            htmlFile.length() + "\r\n" +
+            "\r\n";
+
+         out.write(content.getBytes());
+
+         byte[] buffer =
+            new byte[4096];
+
+         int bytesRead;
+
+         while ((bytesRead =
+               fileInputStream.read(buffer)) != -1) {
+
+            out.write(
+               buffer,
+               0,
+               bytesRead
+            );
+         }
+
+         fileInputStream.close();
          out.flush();
 
       } catch (Exception ex) {
+
          System.err.println(ex);
 
       } finally {
+
          log("GET request finished");
       }
    }
 
-   protected void doPost(HttpServletRequest request,
-                         HttpServletResponse response) {
-
-      log("POST request started");
+   protected void doPost(
+         HttpServletRequest request,
+         HttpServletResponse response) {
 
       boolean acquired = false;
 
+      log("POST request started");
+
       try {
+
          uploadSemaphore.acquire();
          acquired = true;
 
-         String boundary = getBoundary();
+         InputStream in =
+            request.getInputStream();
 
-         if (boundary == null) {
+         ByteArrayOutputStream baos =
+            new ByteArrayOutputStream();
+
+         String line;
+
+         int contentLength = 0;
+
+         String boundary = "";
+         String caption = "";
+         String date = "";
+         String filename = "";
+
+         while ((line = readRequestLine(in)) != null &&
+                line.length() > 0) {
+
+            String[] lineParts =
+               line.split(" ");
+
+            String header =
+               lineParts[0];
+
+            if (header.equals("Content-Type:")) {
+
+               if (lineParts.length > 1 &&
+                   lineParts[1].equals(
+                      "multipart/form-data;")) {
+
+                  String boundaryLine =
+                     lineParts[2];
+
+                  boundary =
+                     boundaryLine.substring(
+                        "boundary=".length()
+                     );
+               }
+            }
+
+            if (header.equals("Content-Length:")) {
+
+               if (lineParts.length > 1) {
+
+                  contentLength =
+                     Integer.parseInt(
+                        lineParts[1]
+                     );
+               }
+            }
+         }
+
+         if (boundary.equals("")) {
+
             throw new UploadException(
                "Multipart boundary not found."
             );
          }
 
-         byte[] body =
-            readAllBytes(request.getInputStream());
+         boolean inFileContent = false;
 
-         String caption = "";
-         String date = "";
-         String fileName = "";
-         byte[] fileData = null;
+         while (!inFileContent &&
+                (line = readRequestLine(in)) != null) {
 
-         byte[] boundaryBytes =
-            ("--" + boundary).getBytes(
-               StandardCharsets.ISO_8859_1
-            );
+            contentLength -=
+               line.length() + 2;
 
-         List<byte[]> parts =
-            split(body, boundaryBytes);
+            String[] lineParts =
+               line.split(" ");
 
-         for (byte[] part : parts) {
+            String header =
+               lineParts[0];
 
-            int headerEnd = indexOf(
-               part,
-               "\r\n\r\n".getBytes(
-                  StandardCharsets.ISO_8859_1
-               ),
-               0
-            );
+            if (header.equals(
+                  "Content-Disposition:")) {
 
-            if (headerEnd == -1) {
-               continue;
-            }
+               if (lineParts.length > 1 &&
+                   lineParts[1].equals(
+                      "form-data;")) {
 
-            String headers = new String(
-               part,
-               0,
-               headerEnd,
-               StandardCharsets.ISO_8859_1
-            );
+                  if (lineParts.length == 3) {
 
-            int dataStart = headerEnd + 4;
-            int dataEnd = part.length;
+                     String[] nameParts =
+                        lineParts[2].split("=");
 
-            if (dataEnd >= 2 &&
-                part[dataEnd - 2] == '\r' &&
-                part[dataEnd - 1] == '\n') {
+                     String field =
+                        nameParts[1];
 
-               dataEnd -= 2;
-            }
+                     line =
+                        readRequestLine(in);
 
-            byte[] data =
-               Arrays.copyOfRange(
-                  part,
-                  dataStart,
-                  dataEnd
-               );
+                     contentLength -=
+                        line.length() + 2;
 
-            if (headers.contains(
-                  "name=\"caption\"")) {
+                     line =
+                        readRequestLine(in);
 
-               caption = new String(
-                  data,
-                  StandardCharsets.UTF_8
-               );
+                     contentLength -=
+                        line.length() + 2;
 
-            } else if (headers.contains(
-                  "name=\"date\"")) {
+                     if (field.equals(
+                           "\"caption\"")) {
 
-               date = new String(
-                  data,
-                  StandardCharsets.UTF_8
-               );
+                        caption = line;
 
-            } else if (headers.contains(
-                  "name=\"fileName\"")) {
+                     } else if (field.equals(
+                           "\"date\"")) {
 
-               fileName = getFileName(headers);
-               fileData = data;
+                        date = line;
+                     }
+
+                  } else if (
+                        lineParts.length == 4) {
+
+                     String[] filenameParts =
+                        lineParts[3].split("=");
+
+                     filename =
+                        filenameParts[1]
+                           .substring(
+                              1,
+                              filenameParts[1]
+                                 .length() - 1
+                           );
+
+                     line =
+                        readRequestLine(in);
+
+                     contentLength -=
+                        line.length() + 2;
+
+                     line =
+                        readRequestLine(in);
+
+                     contentLength -=
+                        line.length() + 2;
+
+                     inFileContent = true;
+                  }
+               }
             }
          }
 
-         if (fileName == null ||
-             fileName.equals("") ||
-             fileData == null) {
+         if (filename.equals("")) {
 
             throw new UploadException(
                "No file was uploaded."
             );
          }
 
-         String savedName =
-            caption + "_" + date + "_" + fileName;
+         System.out.println(
+            "CAPTION: " + caption
+         );
 
-         imageDAO.save(savedName, fileData);
+         System.out.println(
+            "DATE: " + date
+         );
+
+         System.out.println(
+            "FILENAME: " + filename
+         );
+
+         String finalBoundary =
+            "--" + boundary + "--";
+
+         int endLength =
+            finalBoundary.length() + 4;
+
+         byte[] content =
+            new byte[1];
+
+         while (contentLength > endLength &&
+                in.read(content, 0, 1) != -1) {
+
+            contentLength--;
+
+            baos.write(
+               content,
+               0,
+               content.length
+            );
+         }
+
+         String savedName =
+            caption + "_" +
+            date + "_" +
+            filename;
+
+         imageDAO.save(
+            savedName,
+            baos.toByteArray()
+         );
 
          sendDirectoryListing(response);
 
@@ -180,176 +286,6 @@ public class UploadServlet extends HttpServlet {
       }
    }
 
-   private String getBoundary() {
-
-      if (contentType == null) {
-         return null;
-      }
-
-      int index =
-         contentType.indexOf("boundary=");
-
-      if (index == -1) {
-         return null;
-      }
-
-      String boundary =
-         contentType.substring(index + 9).trim();
-
-      if (boundary.startsWith("\"") &&
-          boundary.endsWith("\"")) {
-
-         boundary =
-            boundary.substring(
-               1,
-               boundary.length() - 1
-            );
-      }
-
-      return boundary;
-   }
-
-   private byte[] readAllBytes(InputStream in)
-         throws IOException {
-
-      ByteArrayOutputStream baos =
-         new ByteArrayOutputStream();
-
-      byte[] buffer = new byte[4096];
-      int bytesRead;
-
-      while ((bytesRead = in.read(buffer)) != -1) {
-
-         baos.write(
-            buffer,
-            0,
-            bytesRead
-         );
-      }
-
-      return baos.toByteArray();
-   }
-
-   private List<byte[]> split(
-         byte[] data,
-         byte[] boundary) {
-
-      List<byte[]> parts =
-         new ArrayList<>();
-
-      int start = 0;
-
-      while (true) {
-
-         int boundaryStart =
-            indexOf(data, boundary, start);
-
-         if (boundaryStart == -1) {
-            break;
-         }
-
-         int partStart =
-            boundaryStart + boundary.length;
-
-         if (partStart + 1 < data.length &&
-             data[partStart] == '-' &&
-             data[partStart + 1] == '-') {
-
-            break;
-         }
-
-         if (partStart + 1 < data.length &&
-             data[partStart] == '\r' &&
-             data[partStart + 1] == '\n') {
-
-            partStart += 2;
-         }
-
-         int nextBoundary =
-            indexOf(
-               data,
-               boundary,
-               partStart
-            );
-
-         if (nextBoundary == -1) {
-            break;
-         }
-
-         parts.add(
-            Arrays.copyOfRange(
-               data,
-               partStart,
-               nextBoundary
-            )
-         );
-
-         start = nextBoundary;
-      }
-
-      return parts;
-   }
-
-   private int indexOf(
-         byte[] data,
-         byte[] pattern,
-         int start) {
-
-      for (int i = start;
-           i <= data.length - pattern.length;
-           i++) {
-
-         boolean found = true;
-
-         for (int j = 0;
-              j < pattern.length;
-              j++) {
-
-            if (data[i + j] != pattern[j]) {
-
-               found = false;
-               break;
-            }
-         }
-
-         if (found) {
-            return i;
-         }
-      }
-
-      return -1;
-   }
-
-   private String getFileName(
-         String headers) {
-
-      String marker = "filename=\"";
-
-      int start =
-         headers.indexOf(marker);
-
-      if (start == -1) {
-         return "";
-      }
-
-      start += marker.length();
-
-      int end =
-         headers.indexOf("\"", start);
-
-      if (end == -1) {
-         return "";
-      }
-
-      String fileName =
-         headers.substring(start, end);
-
-      fileName =
-         new File(fileName).getName();
-
-      return fileName;
-   }
-
    private void sendDirectoryListing(
          HttpServletResponse response)
          throws IOException {
@@ -357,40 +293,94 @@ public class UploadServlet extends HttpServlet {
       String[] files =
          imageDAO.getFiles();
 
-      StringBuilder html =
+      StringBuilder middlePart =
          new StringBuilder();
 
-      html.append("<!DOCTYPE html>");
-      html.append("<html>");
-      html.append("<body>");
-      html.append("<h2>Images</h2>");
-      html.append("<ul>");
-
       Arrays.stream(files).forEach(file -> {
-         html.append("<li>");
-         html.append(file);
-         html.append("</li>");
+         middlePart.append("<li>");
+         middlePart.append(file);
+         middlePart.append("</li>");
       });
 
-      html.append("</ul>");
-      html.append("</body>");
-      html.append("</html>");
+      String topPart =
+         "<!DOCTYPE html><html><body><ul>";
 
-      PrintWriter out =
-         new PrintWriter(
-            response.getOutputStream(),
-            true
-         );
+      String bottomPart =
+         "</ul></body></html>";
 
-      out.print("HTTP/1.1 200 OK\r\n");
-      out.print("Content-Type: text/html\r\n");
-      out.print("Connection: close\r\n");
-      out.print("\r\n");
-      out.print(html.toString());
+      String html =
+         topPart +
+         middlePart +
+         bottomPart;
+
+      OutputStream out =
+         response.getOutputStream();
+
+      out.write(
+         "HTTP/1.1 200 OK\r\n".getBytes()
+      );
+
+      out.write(
+         "Content-Type: text/html\r\n"
+            .getBytes()
+      );
+
+      out.write(
+         ("Content-Length: " +
+          html.getBytes().length +
+          "\r\n").getBytes()
+      );
+
+      out.write("\r\n".getBytes());
+
+      out.write(html.getBytes());
+
       out.flush();
    }
 
+   private String readRequestLine(
+         InputStream is) {
+
+      char c;
+      String s = "";
+      boolean hitReturn = false;
+
+      do {
+
+         try {
+
+            c = (char) is.read();
+
+         } catch (Exception e) {
+
+            return null;
+         }
+
+         if (c == '\r') {
+
+            hitReturn = true;
+
+         } else if (hitReturn &&
+                    c == '\n') {
+
+            return s;
+
+         } else {
+
+            s += c + "";
+         }
+
+      } while (c != -1);
+
+      if (s.length() > 0) {
+         return s;
+      }
+
+      return null;
+   }
+
    private void log(String message) {
+
       System.out.println(
          "[UploadServer] " + message
       );

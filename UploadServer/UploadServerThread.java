@@ -16,93 +16,75 @@ public class UploadServerThread extends Thread {
    public void run() {
 
       try {
+         System.out.println("Thread running");
+
          BufferedInputStream in =
             new BufferedInputStream(socket.getInputStream());
 
-         String firstLine = readLine(in);
+         String requestLine = readLine(in);
 
-         if (firstLine == null) {
+         if (requestLine == null) {
             socket.close();
             return;
          }
 
-         int contentLength = 0;
-         String contentType = "";
+         String[] requestParts = requestLine.split(" ");
 
-         String headerLine;
+         String method = requestParts[0];
+         String uri = requestParts[1];
 
-         while ((headerLine = readLine(in)) != null &&
-                !headerLine.equals("")) {
+         HttpServletRequest req =
+            new HttpServletRequest(in);
 
-            if (headerLine.toLowerCase().startsWith("content-length:")) {
-               contentLength = Integer.parseInt(
-                  headerLine.substring(headerLine.indexOf(":") + 1).trim()
-               );
-            }
+         ByteArrayOutputStream baos =
+            new ByteArrayOutputStream();
 
-            if (headerLine.toLowerCase().startsWith("content-type:")) {
-               contentType =
-                  headerLine.substring(headerLine.indexOf(":") + 1).trim();
-            }
-         }
+         HttpServletResponse res =
+            new HttpServletResponse(baos);
 
-         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-         HttpServletResponse res = new HttpServletResponse(baos);
+         // Component based architecture using Reflection
          HttpServlet httpServlet =
-            ComponentLoader.loadServlet("UploadServlet");
+            ComponentLoader.loadServlet("UploadServletSingleton");
 
-         String[] requestLine = firstLine.split(" ");
+         if ("GET".equalsIgnoreCase(method) &&
+             "/".equals(uri)) {
 
-         if (requestLine[0].equals("GET") &&
-             requestLine[1].equals("/")) {
-
-            HttpServletRequest req =
-               new HttpServletRequest(in);
+            System.out.println(
+               "Calling UploadServlet's doGet"
+            );
 
             httpServlet.doGet(req, res);
 
-         } else if (requestLine[0].equals("POST") &&
-                    requestLine[1].equals("/")) {
+         } else if ("POST".equalsIgnoreCase(method)) {
 
-            byte[] body = new byte[contentLength];
-
-            int totalRead = 0;
-
-            while (totalRead < contentLength) {
-
-               int bytesRead =
-                  in.read(body, totalRead, contentLength - totalRead);
-
-               if (bytesRead == -1) {
-                  break;
-               }
-
-               totalRead += bytesRead;
-            }
-
-            HttpServletRequest req =
-               new HttpServletRequest(
-                  new ByteArrayInputStream(body)
-               );
-
-            ((UploadServlet) httpServlet).setContentType(contentType);
+            System.out.println(
+               "Calling UploadServlet's doPost"
+            );
 
             httpServlet.doPost(req, res);
+
+         } else {
+
+            res.getOutputStream().write(
+               "HTTP/1.1 405 Method Not Allowed\r\n\r\n"
+                  .getBytes()
+            );
          }
 
-         OutputStream out = socket.getOutputStream();
+         OutputStream out =
+            socket.getOutputStream();
 
-         out.write(
-            ((ByteArrayOutputStream) baos).toByteArray()
-         );
-
+         out.write(baos.toByteArray());
          out.flush();
+
          socket.close();
 
       } catch (Exception e) {
+
          e.printStackTrace();
 
       } finally {
+
          connectionSemaphore.release();
       }
    }

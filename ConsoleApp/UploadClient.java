@@ -1,6 +1,7 @@
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 
 public class UploadClient {
 
@@ -12,8 +13,8 @@ public class UploadClient {
 
       try {
          String boundary = "----JavaClientBoundary";
-         String caption = "kaiser";
-         String date = "2026-10-04";
+         String caption = "Test";
+         String date = "2026-10-05";
          File file = new File("kaiser.txt");
 
          Socket socket = new Socket("localhost", 8082);
@@ -46,8 +47,15 @@ public class UploadClient {
                .getBytes(StandardCharsets.UTF_8)
          );
 
+         String contentType =
+            Files.probeContentType(file.toPath());
+
+         if (contentType == null) {
+            contentType = "application/octet-stream";
+         }
+
          body.write(
-            "Content-Type: application/octet-stream\r\n\r\n"
+            ("Content-Type: " + contentType + "\r\n\r\n")
                .getBytes(StandardCharsets.UTF_8)
          );
 
